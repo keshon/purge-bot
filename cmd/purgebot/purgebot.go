@@ -330,8 +330,9 @@ func (b *Bot) listPurgeTasks(s *discordgo.Session, guildID, channelID string) {
 			continue
 		}
 		if ch.GuildID == guildID {
+			fmt.Println(task.PurgeDurationSeconds)
 			duration := time.Duration(task.PurgeDurationSeconds) * time.Second
-			sb.WriteString(fmt.Sprintf("<#%s>, duration: %s\n", ch.ID, formatDuration(time.Duration(duration)*time.Second)))
+			sb.WriteString(fmt.Sprintf("<#%s>, duration: %s\n", ch.ID, formatDuration(duration)))
 		}
 	}
 
