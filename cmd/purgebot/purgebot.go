@@ -285,7 +285,7 @@ func (b *Bot) purgeChannel(s *discordgo.Session, channelID string, duration time
 		}
 
 		for _, msg := range messages {
-			log.Printf("Checking message %s from %s, timestamp: %s", msg.ID, msg.Author.ID, msg.Timestamp)
+			// log.Printf("Checking message %s from %s, timestamp: %s", msg.ID, msg.Author.ID, msg.Timestamp)
 
 			if msg.Timestamp.Before(threshold) {
 				err = s.ChannelMessageDelete(channelID, msg.ID)
