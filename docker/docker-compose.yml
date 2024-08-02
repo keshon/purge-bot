@@ -1,0 +1,11 @@
+services:
+  app:
+    image: '${ALIAS}-image'
+    container_name: ${ALIAS}
+    restart: always
+    volumes:
+      - ./data/database.sqlite3:/usr/project/database.db
+    environment:
+      - DISCORD_KEY    
+
+    entrypoint: /usr/project/app
