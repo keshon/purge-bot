@@ -5,6 +5,7 @@ services:
     restart: always
     volumes:
       - ./data/database.sqlite3:/usr/project/database.db
+      - ./.env:/usr/project/.env
     environment:
       - DISCORD_KEY    
 
