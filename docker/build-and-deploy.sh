@@ -17,7 +17,7 @@ else
     fi
 fi
 
-docker-compose down
+docker compose down
 
 if [ "$(docker images -q "${ALIAS}-image" 2>/dev/null)" ]; then
     docker rmi "${ALIAS}-image"
