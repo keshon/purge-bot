@@ -28,6 +28,20 @@ type Task struct {
 	PurgeDurationSeconds int
 }
 
+type UserPermission struct {
+	ID       uint `gorm:"primaryKey"`
+	UserID   string
+	GuildID  string
+	CanPurge bool
+}
+
+type RolePermission struct {
+	ID       uint `gorm:"primaryKey"`
+	RoleID   string
+	GuildID  string
+	CanPurge bool
+}
+
 func main() {
 	bot := NewBot()
 	if err := bot.Run(); err != nil {
@@ -60,7 +74,7 @@ func (b *Bot) Run() error {
 		return fmt.Errorf("error opening database: %w", err)
 	}
 
-	if err := b.db.AutoMigrate(&Task{}); err != nil {
+	if err := b.db.AutoMigrate(&Task{}, &UserPermission{}, &RolePermission{}); err != nil {
 		return fmt.Errorf("error migrating database: %w", err)
 	}
 
@@ -118,14 +132,14 @@ func (b *Bot) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if strings.HasPrefix(m.Content, "<@") && strings.Contains(m.Content, s.State.User.ID) {
 		log.Println("Bot mentioned in message")
 
-		if !b.isAdminOrOwner(s, m.GuildID, m.Author.ID) {
-			s.ChannelMessageSend(m.ChannelID, "You need to be an administrator or the owner of the guild to use this bot.")
+		if !b.isAdminOrOwner(s, m.GuildID, m.Author.ID) && !b.checkUserPermission(s, m.GuildID, m.Author.ID) {
+			s.ChannelMessageSend(m.ChannelID, "You don't have the necessary permissions to use this bot. You must be either the server owner, an administrator, or a user with special permissions assigned by an admin.")
 			return
 		}
 
 		args := strings.Fields(m.Content)
 		if len(args) < 2 {
-			log.Println("Insufficient arguments")
+			s.ChannelMessageSend(m.ChannelID, "Insufficient arguments. Type @bot help for available commands.")
 			return
 		}
 
@@ -137,14 +151,15 @@ func (b *Bot) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		switch command {
 		case "help":
 			helpMessage := fmt.Sprintf(`
-**AVAILABLE COMMANDS**
+**PURGING COMMANDS**
+_by default only for admins and server owners_
 
 purge old messages:
 %s 30s
 %s 5m
 %s 24h
 %s 2d
-or any custom duration
+(or any custom duration)
 
 stop purge task:
 %s stop
@@ -152,14 +167,168 @@ stop purge task:
 list purge tasks:
 %s list
 
+**USER/ROLE MANAGEMENT**
+list permissions:
+%s listpermissions
+
+user permission to manage purge tasks:
+%s adduser <username>
+%s adduserid <user id>
+%s removeuser <username>
+%s removeuserid <user id>
+
+role permission to manage purge tasks:
+%s addrole <role name>
+%s addroleid <role id>
+%s removerole <role name>
+%s removeroleid <role id>
+
 get help:
-%s help`, botMention, botMention, botMention, botMention, botMention, botMention, botMention)
+%s help`,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention,
+				botMention, botMention)
 			s.ChannelMessageSend(m.ChannelID, helpMessage)
+
 		case "stop":
 			b.stopAndDeleteTask(channelID)
 			s.ChannelMessageSend(m.ChannelID, "Purging stopped.")
+
 		case "list":
 			b.listPurgeTasks(s, m.GuildID, m.ChannelID)
+
+		case "adduser":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a username.")
+				return
+			}
+			username := strings.Join(args[2:], " ")
+			userID, err := b.getUserIDByName(s, m.GuildID, username)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User '%s' not found.", username))
+				return
+			}
+			b.addUserPermission(m.GuildID, userID, true)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User '%s' can now manage purge tasks.", username))
+		case "removeuser":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a username.")
+				return
+			}
+			username := strings.Join(args[2:], " ")
+			userID, err := b.getUserIDByName(s, m.GuildID, username)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User '%s' not found.", username))
+				return
+			}
+			b.removeUserPermission(m.GuildID, userID)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User '%s' can no longer manage purge tasks.", username))
+		case "addrole":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a role name.")
+				return
+			}
+			roleName := strings.Join(args[2:], " ")
+			roleID, err := b.getRoleIDByName(s, m.GuildID, roleName)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role '%s' not found.", roleName))
+				return
+			}
+			b.addRolePermission(m.GuildID, roleID, true)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role '%s' can now manage purge tasks.", roleName))
+		case "removerole":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a role name.")
+				return
+			}
+			roleName := strings.Join(args[2:], " ")
+			roleID, err := b.getRoleIDByName(s, m.GuildID, roleName)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role '%s' not found.", roleName))
+				return
+			}
+			b.removeRolePermission(m.GuildID, roleID)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role '%s' can no longer manage purge tasks.", roleName))
+		case "adduserid":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a username.")
+				return
+			}
+			userID := args[2]
+			b.addUserPermission(m.GuildID, userID, true)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User %s can now manage purge tasks.", userID))
+			return
+		case "removeuserid":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a user ID.")
+				return
+			}
+			userID := args[2]
+			if err := b.removeUserPermission(m.GuildID, userID); err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Failed to remove user %s's permissions: %v", userID, err))
+			} else {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("User %s can no longer manage purge tasks.", userID))
+			}
+		case "addroleid":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a role name.")
+				return
+			}
+			roleID := args[2]
+			b.addRolePermission(m.GuildID, roleID, true)
+			s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role %s can now manage purge tasks.", roleID))
+			return
+		case "removeroleid":
+			if len(args) < 3 {
+				s.ChannelMessageSend(m.ChannelID, "Please provide a role ID.")
+				return
+			}
+			roleID := args[2]
+			if err := b.removeRolePermission(m.GuildID, roleID); err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Failed to remove role %s's permissions: %v", roleID, err))
+			} else {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Role %s can no longer manage purge tasks.", roleID))
+			}
+		case "listpermissions":
+			users, err := b.listUserPermissions(s, m.GuildID)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Failed to retrieve user permissions: %v", err))
+				return
+			}
+
+			roles, err := b.listRolePermissions(s, m.GuildID)
+			if err != nil {
+				s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("Failed to retrieve role permissions: %v", err))
+				return
+			}
+
+			var message strings.Builder
+			message.WriteString("**Registered Users and Roles for Purge Tasks:**\n\n")
+
+			if len(users) == 0 && len(roles) == 0 {
+				message.WriteString("No users or roles are registered to manage purge tasks.")
+			} else {
+				if len(users) > 0 {
+					message.WriteString("**Users:**\n")
+					for _, user := range users {
+						message.WriteString(fmt.Sprintf("- %s\n", user))
+					}
+				}
+
+				if len(roles) > 0 {
+					message.WriteString("**Roles:**\n")
+					for _, role := range roles {
+						message.WriteString(fmt.Sprintf("- %s\n", role))
+					}
+				}
+			}
+
+			s.ChannelMessageSend(m.ChannelID, message.String())
 		default:
 			duration, err := b.parseDuration(command)
 			if err != nil {
@@ -341,6 +510,163 @@ func (b *Bot) listPurgeTasks(s *discordgo.Session, guildID, channelID string) {
 	} else {
 		s.ChannelMessageSend(channelID, sb.String())
 	}
+}
+
+func (b *Bot) getUserIDByName(s *discordgo.Session, guildID, username string) (string, error) {
+	members, err := s.GuildMembers(guildID, "", 1000) // Increase limit if necessary
+	if err != nil {
+		return "", err
+	}
+	for _, member := range members {
+		if member.User.Username == username {
+			return member.User.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("user not found, try user ID instead")
+}
+
+func (b *Bot) addUserPermission(guildID, userID string, canPurge bool) {
+	permission := UserPermission{
+		UserID:   userID,
+		GuildID:  guildID,
+		CanPurge: canPurge,
+	}
+	b.db.Save(&permission)
+}
+func (b *Bot) removeUserPermission(guildID, userID string) error {
+	if err := b.db.Where("guild_id = ? AND user_id = ?", guildID, userID).Delete(&UserPermission{}).Error; err != nil {
+		return fmt.Errorf("failed to remove user permission: %v", err)
+	}
+	return nil
+}
+
+func (b *Bot) getRoleIDByName(s *discordgo.Session, guildID, roleName string) (string, error) {
+	// Fetch all roles in the guild
+	roles, err := s.GuildRoles(guildID)
+	if err != nil {
+		return "", err
+	}
+
+	// Loop through the roles to find the role by name
+	for _, role := range roles {
+		if role.Name == roleName {
+			return role.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("role not found")
+}
+
+func (b *Bot) addRolePermission(guildID, roleID string, canPurge bool) {
+	permission := RolePermission{
+		RoleID:   roleID,
+		GuildID:  guildID,
+		CanPurge: canPurge,
+	}
+	b.db.Save(&permission)
+}
+
+func (b *Bot) removeRolePermission(guildID, roleID string) error {
+	if err := b.db.Where("guild_id = ? AND role_id = ?", guildID, roleID).Delete(&RolePermission{}).Error; err != nil {
+		return fmt.Errorf("failed to remove role permission: %v", err)
+	}
+	return nil
+}
+
+func (b *Bot) checkUserPermission(s *discordgo.Session, guildID, userIDOrName string) bool {
+	// First, assume the input is a user ID and try to check by ID
+	var permission UserPermission
+	if err := b.db.Where("guild_id = ? AND user_id = ?", guildID, userIDOrName).First(&permission).Error; err == nil {
+		return permission.CanPurge
+	}
+
+	// If no user-specific permission is found, resolve the name to an ID if necessary
+	member, err := s.GuildMember(guildID, userIDOrName)
+	if err != nil {
+		// If the input is not a user ID, try to resolve it as a username or nickname
+		userID, err := b.getUserIDByName(s, guildID, userIDOrName)
+		if err != nil {
+			return false // User not found by name either
+		}
+
+		// Check user-specific permissions with the resolved user ID
+		if err := b.db.Where("guild_id = ? AND user_id = ?", guildID, userID).First(&permission).Error; err == nil {
+			return permission.CanPurge
+		}
+
+		// Now that we have a valid user ID, get the GuildMember object
+		member, err = s.GuildMember(guildID, userID)
+		if err != nil {
+			return false
+		}
+	}
+
+	// Check role permissions if no specific user permission is found
+	for _, roleID := range member.Roles {
+		var rolePermission RolePermission
+		if err := b.db.Where("guild_id = ? AND role_id = ?", guildID, roleID).First(&rolePermission).Error; err == nil {
+			if rolePermission.CanPurge {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (b *Bot) listUserPermissions(s *discordgo.Session, guildID string) ([]string, error) {
+	var permissions []UserPermission
+	err := b.db.Where("guild_id = ?", guildID).Find(&permissions).Error
+	if err != nil {
+		return nil, err
+	}
+
+	var users []string
+	for _, permission := range permissions {
+		member, err := s.GuildMember(guildID, permission.UserID)
+		if err != nil {
+			users = append(users, fmt.Sprintf("%s (unknown name)", permission.UserID))
+		} else {
+			users = append(users, fmt.Sprintf("%s (%s)", member.User.ID, member.User.Username))
+		}
+	}
+
+	return users, nil
+}
+
+func (b *Bot) listRolePermissions(s *discordgo.Session, guildID string) ([]string, error) {
+	var permissions []RolePermission
+	err := b.db.Where("guild_id = ?", guildID).Find(&permissions).Error
+	if err != nil {
+		return nil, err
+	}
+
+	var roles []string
+	guild, err := s.Guild(guildID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, permission := range permissions {
+		role, err := s.State.Role(guildID, permission.RoleID)
+		if err != nil {
+			// Attempt to fetch the role if not present in the state
+			for _, r := range guild.Roles {
+				if r.ID == permission.RoleID {
+					role = r
+					break
+				}
+			}
+		}
+		if role.ID == "" {
+			roles = append(roles, fmt.Sprintf("%s (unknown name)", permission.RoleID))
+		} else {
+			roles = append(roles, fmt.Sprintf("%s (%s)", role.ID, role.Name))
+		}
+	}
+
+	return roles, nil
 }
 
 func formatDuration(duration time.Duration) string {
