@@ -19,9 +19,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem Change directory to the root level
-cd ..
-
 rem Create or clear the "dist" directory for the target platform
 if exist dist\%TARGET_PLATFORM% rmdir /s /q dist\%TARGET_PLATFORM%
 mkdir dist\%TARGET_PLATFORM%
@@ -46,8 +43,5 @@ rem Pack the binary with UPX
 
 rem Create a zip archive with version and current date
 powershell -command "& { Compress-Archive -Path 'dist\%TARGET_PLATFORM%' -DestinationPath '%OUTPUT_ARCHIVE%' -Force}"
-
-rem Change directory back to the "scripts" subdirectory
-cd scripts
 
 echo "Build process completed successfully."
