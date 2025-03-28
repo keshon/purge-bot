@@ -1,5 +1,5 @@
 # First stage: build the Go application
-FROM golang:1.22.5-alpine3.20 AS build
+FROM golang:1.23-alpine3.20 AS build
 
 RUN apk add --no-cache build-base
 ADD src /usr/project
